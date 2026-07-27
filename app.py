@@ -1,14 +1,17 @@
 import json
 import os
 from datetime import datetime
-
+import math
 import streamlit as st
 from openai import OpenAI
 
 # 项目根目录（保证无论从哪启动都能找到 knowledge.txt）
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-API_KEY = os.getenv("qianwen_api")
+API_KEY = os.getenv(
+    "qianwen_api",
+    "sk-ws-H.EMHRREM.Uyvm.MEUCIQDOJhH-7nUUvPlLlx0I--QtPVk_6MEaBVDVAgx2-KT8kgIgOcEb2vMPbtHmTUAlOdp61hbvEUUUMGFkkds1VbuASbY"
+)
 BASE_URL = os.getenv(
     "QIANWEN_BASE_URL",
     "https://llm-nfrbx1834flhn3ix.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
@@ -82,14 +85,44 @@ def run_tool(tool_name: str, arguments: str) -> str:
         return func(args["expression"])
     return func()
 
+def get_embedding(text_input: str) -> list[float]:
+    # 注意：转向量要用 embeddings，不是 chat.completions
+    response = client.embeddings.create(
+        model="text-embedding-v3",
+        input=text_input,
+    )
+    return response.data[0].embedding
+
+
+def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    norm_a = math.sqrt(sum(a * a for a in vec_a))
+    norm_b = math.sqrt(sum(b * b for b in vec_b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+@st.cache_resource
+def build_chunk_vectors():
+    vectors = []
+    for chunk in chunks:
+        vectors.append(get_embedding(chunk))
+    return vectors
+
+
+# 必须写在 get_embedding 定义之后
+chunk_vectors = build_chunk_vectors()
+
 
 def search_knowledge(question: str, top_k: int = 2) -> list[str]:
+    question_vector = get_embedding(question)
     scored = []
-    for chunk in chunks:
-        score = sum(1 for ch in set(question) if ch in chunk)
+    for chunk, chunk_vector in zip(chunks, chunk_vectors):
+        score = cosine_similarity(question_vector, chunk_vector)
         scored.append((score, chunk))
     scored.sort(key=lambda item: item[0], reverse=True)
-    return [chunk for score, chunk in scored[:top_k] if score > 0]
+    return [chunk for score, chunk in scored[:top_k]]
 
 
 SYSTEM_PROMPT = (
